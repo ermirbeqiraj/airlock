@@ -30,8 +30,18 @@ EOF
     uv add -q six && uv run -q t >/dev/null && uv sync -q --locked && uv run -q --frozen t >/dev/null
 }
 
+# A Python tool that runs on node (pyright): uses the image's pinned node, nothing to download.
+t_pyright() {
+  project work-python-pyright
+  printf 'x: int = 1\n' > t.py
+  printf '[project]\nname = "t"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n\n[dependency-groups]\ndev = ["pyright"]\n\n[tool.uv]\npackage = false\n' > pyproject.toml
+  local out; out=$(uv run pyright t.py 2>&1)
+  [[ $out == *"0 errors"* ]] || { echo "$out"; return 1; }
+}
+
 check W2 "uv and uvx run"                      t_tools
 check W2 "uv sync + uv run import works"       t_sync
 check W3 ".venv stays off the host disk"       t_not_on_host
 check W2 "a uv_build package: uv sync, uv run <entry point>, uv add, --locked/--frozen" t_package
+check W2 "uv run pyright (a Python tool on node) works"  t_pyright
 check W2 "python3 stays the host's (not shimmed)" t_python3_host
