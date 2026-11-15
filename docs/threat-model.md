@@ -15,7 +15,7 @@ is a hope, not a claim.
 | C2 | Package code can't run at install time: npm/pnpm install scripts and Python source builds are blocked, and a project's own config can't turn them back on. | Install is the most common attack moment. It runs before you've even used the package. |
 | C3 | Versions published in the last 7 days aren't installed. | Hijacked releases are usually caught and pulled within days. |
 | C4 | Package code can't plant things the host runs or reads later: git hooks/config, agent config (`.claude/`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.pi/`), editor and CI config (`.vscode/`, `.idea/`, `.github/`), `.envrc`, `.airlock`. Existing ones are read-only. New ones are moved to quarantine when the command ends, with a warning. | The host's agents and editor have full access. Planting instructions or hooks for them is a way out of the box. |
-| C5 | Only a project gets mounted: the git repo you're in, or the nearest folder marked with `.airlock`. Never your home folder, a folder above it, or a plain folder. | Running `node` in `~/src` or `~/Dropbox` must not expose everything below it. |
+| C5 | Only a project gets mounted: the git repo you're in, or the nearest folder marked with `.airlock`. Never your home folder, a folder above it, a plain folder, or one holding what the host runs (airlock itself, a folder on PATH). | Running `node` in `~/src` or `~/Dropbox` must not expose everything below it. |
 | C6 | Package code can't take over the container or reach the machine: non-root, no capabilities, no privilege escalation, read-only system files, no Docker socket, memory and process limits. | Keeps the wall a wall. |
 | C7 | Dev servers are reachable from this machine only (127.0.0.1), not from the LAN. | A dev server is unauthenticated code. |
 | C8 | What's pinned stays pinned: base images by digest, tool versions exact. | You know what runs, and it changes only when you change it. |
@@ -39,6 +39,9 @@ is a hope, not a claim.
 - **C4 — a nested `.git` ran planted hooks on the host** (red-team, 2026-11-15). Only the top
   `.git` was protected; package code planted `sub/.git` pointing at a gitdir it wrote, and
   host `git -C sub commit` ran its hook. **Fix:** `.git` is protected at any depth.
+- **C4 — airlock's own code was writable** (red-team, 2026-11-15). Run from the airlock repo,
+  package code appended to `bin/airlock`, which every shim then ran on the host. **Fix:** airlock
+  refuses a project that contains its own code or any folder on PATH.
 - **C5 — a plain folder got mounted.** Outside a git repo, airlock mounted the current folder,
   e.g. all of `~/src`. **Fix:** a git repo or a folder marked with `.airlock` is required.
 

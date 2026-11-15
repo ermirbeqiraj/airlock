@@ -167,6 +167,16 @@ cmd_run() {
     "$HOME"/*) ;;
     *) die "$root is outside $HOME, which is the only folder Docker Desktop shares with containers." ;;
   esac
+  # Never mount what the host runs: airlock's own code (the shims run bin/airlock, bases/ get
+  # built) or a folder on PATH. Package code could rewrite it (found by red-team,
+  # tests/must-block/airlock-self.sh). An empty PATH entry means the current folder.
+  local d dirs; IFS=: read -ra dirs <<< "$PATH"
+  for d in "$AIRLOCK_HOME" "${dirs[@]}"; do
+    d=$(readlink -f -- "${d:-.}") || continue
+    case "$d/" in
+      "$root"/*) die "refusing to mount $root: it contains $d, which the host runs (airlock itself or a folder on PATH)." ;;
+    esac
+  done
 
   local args=(
     --rm --init

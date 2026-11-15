@@ -37,8 +37,16 @@ t_git_subdir() {
     "$P" "$WORK/outside-git.txt"
 }
 
+# A project folder on PATH: the host runs what's in it, so package code must not get to write it.
+t_on_path() {
+  project scope-path; mkdir -p bin
+  local out; out=$(PATH="$P/bin:$PATH" "$AIRLOCK" run node true 2>&1) && { echo "it ran"; return 1; }
+  [[ $out == *"which the host runs"* ]] || { echo "failed, but not for the expected reason: $out"; return 1; }
+}
+
 check C5 "refuses the home folder"                         t_home
 check C5 "refuses folders outside home"                    t_outside
 check C5 "refuses a plain folder (no git, no .airlock)"    t_plain
 check C5 "a .airlock folder works, and only it is mounted" t_marked
 check C5 "from a repo subfolder, the repo is mounted, nothing above" t_git_subdir
+check C5 "refuses a project holding a folder on PATH"        t_on_path
