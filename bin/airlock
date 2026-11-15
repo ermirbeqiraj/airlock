@@ -78,8 +78,10 @@ port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
 # Paths the host runs or reads later: agent, editor, CI and direnv config, and airlock's own.
 # Package code must not plant or change them (docs/threat-model.md, C4).
+# .git matches below the top level only (the top one is handled on its own): a nested .git
+# file or folder makes host git run its hooks (found by red-team, tests/must-block/nested-git.sh).
 PROTECTED=(.claude .mcp.json CLAUDE.md CLAUDE.local.md AGENTS.md .pi .vscode .idea .github
-           .envrc .airlock .devcontainer)
+           .envrc .airlock .devcontainer .git)
 
 # Protected paths under $1, relative, one per line. Skips .git (read-only anyway) and the deps
 # volume mountpoint $2 (another filesystem: nothing can be moved into it).

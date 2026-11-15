@@ -36,6 +36,9 @@ is a hope, not a claim.
   inside. Docker Desktop's "sharing your home directory" warning was the visible symptom.
   **Fix:** `.git` is never mounted through a link (airlock refuses to run), and a `.git` that
   appears during a run is quarantined. General rule: airlock never mounts a link.
+- **C4 — a nested `.git` ran planted hooks on the host** (red-team, 2026-11-15). Only the top
+  `.git` was protected; package code planted `sub/.git` pointing at a gitdir it wrote, and
+  host `git -C sub commit` ran its hook. **Fix:** `.git` is protected at any depth.
 - **C5 — a plain folder got mounted.** Outside a git repo, airlock mounted the current folder,
   e.g. all of `~/src`. **Fix:** a git repo or a folder marked with `.airlock` is required.
 
@@ -51,3 +54,4 @@ is a hope, not a claim.
 | N6 | Escapes from Docker Desktop's VM or the kernel. | Out of scope. The VM is a second wall. |
 | N7 | Production and deploys. | A different problem. |
 | N8 | A trusted caller can relax the rules, e.g. `npm install --ignore-scripts=false` (command-line flags win). | Agents are told not to, and to ask first. |
+| N9 | Package code can write a folder shaped like a bare git repo. Running git *inside* it may use its config. | Not reproduced with `git status` (2.53). Host fix: `git config --global safe.bareRepository explicit`. |
