@@ -110,12 +110,15 @@ snapshot() {  # <root> <paths...> -> "fingerprint path" lines
 # away, plant a fresh one in its place). Changes without such evidence are the host's own edits
 # during the run, and stay. Returns 1 if anything was planted.
 check_planted() {
-  local root=$1 skip=$2 before=$3 backup=$4 p fp evidence=0
+  local root=$1 skip=$2 before=$3 backup=$4 git_before=$5 p fp evidence=0
   local -a now new=() changed=()
   local -A was=()
   mapfile -t now < <(protected_paths "$root" "$skip")
   while read -r fp p; do if [ -n "$p" ]; then was[$p]=$fp; fi; done <<< "$before"
   for p in "${now[@]}"; do [ -n "${was[$p]+x}" ] || new+=("$p"); done
+  # .git is skipped above (it's read-only when it exists), but one appearing during the run is
+  # planted: host git would run its hooks, and a link would be mounted on the next run.
+  if [ "$git_before" = 0 ] && { [ -e "$root/.git" ] || [ -L "$root/.git" ]; }; then new+=(.git); fi
   [ ${#new[@]} -gt 0 ] && evidence=1
   for p in "${!was[@]}"; do
     if [ -e "$root/$p" ] || [ -L "$root/$p" ]; then
@@ -174,7 +177,12 @@ cmd_run() {
     -e "TZ=$(readlink -f /etc/localtime | sed 's|.*/zoneinfo/||')"
     -v "$root:$root" -w "$PWD"
   )
-  [ -e "$root/.git" ] && args+=(-v "$root/.git:$root/.git:ro")
+  # .git is mounted read-only (hooks and config run on the host). Never through a link: Docker
+  # follows it, so a planted `.git -> $HOME` would mount the whole home folder (found by an
+  # independent red-team run, tests/must-block/git-symlink.sh).
+  [ -L "$root/.git" ] && die "$root/.git is a link, not a folder: refusing. Package code may have planted it to expose what it points to. Check it, and remove it if you didn't make it."
+  local git_before=0
+  if [ -e "$root/.git" ]; then git_before=1; args+=(-v "$root/.git:$root/.git:ro"); fi
 
   # Deps folder (node_modules, .venv) lives in a per-project volume, never on the host disk.
   local marker depdir tag pkg
@@ -233,7 +241,7 @@ cmd_run() {
   fi
   trap - INT TERM HUP
 
-  check_planted "$root" "$skip" "$before" "$backup" || { [ "$rc" -ne 0 ] || rc=1; }
+  check_planted "$root" "$skip" "$before" "$backup" "$git_before" || { [ "$rc" -ne 0 ] || rc=1; }
   rm -rf "$backup"
   return "$rc"
 }

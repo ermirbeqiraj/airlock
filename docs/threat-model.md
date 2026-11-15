@@ -29,6 +29,13 @@ is a hope, not a claim.
   original always shows up as a new protected path, and that's the evidence: then every
   changed protected path is restored from a backup taken before the run. Without evidence, a
   change is your own edit on the host during the run, and stays (tested both ways).
+- **C1 — a planted `.git` link mounted the home folder** (found by an independent red-team
+  session, 2026-11-15). In an `.airlock`-marked folder that isn't a git repo, package code
+  could create `.git -> $HOME`. The after-run check skipped `.git`, so the link survived, and
+  the next run's read-only `.git` mount followed it: the whole home folder became readable
+  inside. Docker Desktop's "sharing your home directory" warning was the visible symptom.
+  **Fix:** `.git` is never mounted through a link (airlock refuses to run), and a `.git` that
+  appears during a run is quarantined. General rule: airlock never mounts a link.
 - **C5 — a plain folder got mounted.** Outside a git repo, airlock mounted the current folder,
   e.g. all of `~/src`. **Fix:** a git repo or a folder marked with `.airlock` is required.
 
