@@ -1,0 +1,10 @@
+#!/bin/sh
+# Container entrypoint for every airlock base.
+# Dev servers usually listen on localhost only, which Docker can't publish. For each port P in
+# AIRLOCK_PORTS, forward container port P+10000 -> localhost:P (airlock publishes host
+# 127.0.0.1:P -> container P+10000). A different port, so a server that binds all addresses
+# itself doesn't collide with the forwarder.
+for p in $AIRLOCK_PORTS; do
+  socat "TCP-LISTEN:$((p + 10000)),fork,reuseaddr" "EXEC:airlock-fwd-conn $p" 2>/dev/null &
+done
+exec "$@"

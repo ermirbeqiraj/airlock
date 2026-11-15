@@ -1,0 +1,7 @@
+# Baked into the python base and named by UV_CONFIG_FILE.
+# Why a file: `uv pip install` has no env var for no-build, and UV_CONFIG_FILE beats a
+# project's own [tool.uv] / [tool.uv.pip] settings (tested).
+no-build = true
+
+[pip]
+no-build = true

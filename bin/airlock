@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# airlock — run project code in throwaway containers built from bases we maintain.
+#
+#   airlock run <base> <command...>   run a command in a fresh container
+#   airlock shell <base>              interactive shell in a fresh container
+#   airlock build <base>              (re)build a base image
+#   airlock status                    list base images and volumes
+#   airlock prune                     remove volumes of projects that no longer exist
+#
+# Called through a shim symlink (node, npm, pnpm, uv, pip, … → this file), it runs that
+# tool in the matching base: `pnpm test` == `airlock run node pnpm test`.
+set -euo pipefail
+
+AIRLOCK_HOME="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"  # bin/ -> repo root
+BASES="$AIRLOCK_HOME/bases"
+
+die() { echo "airlock: $*" >&2; exit 1; }
+
+# Which base serves which tool.
+base_for() {
+  case "$1" in
+    node|npm|npx|pnpm|pnpx) echo node ;;
+    uv|uvx|pip|pip3)        echo python ;;
+    *) return 1 ;;
+  esac
+}
+
+# Per base: the file that marks a project, and the deps folder kept in a volume next to it.
+deps_for() {
+  case "$1" in
+    node)   echo "package.json node_modules nm" ;;
+    python) echo "pyproject.toml .venv venv" ;;
+  esac
+}
+
+# Image tag = hash of the base's build files (+ common), so editing them triggers a rebuild.
+image_for() {
+  [ -f "$BASES/$1/Dockerfile" ] || die "unknown base '$1' (no $BASES/$1/Dockerfile)"
+  local h
+  h=$(cd "$BASES" && find "$1" common -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-12)
+  echo "airlock-$1:$h"
+}
+
+# Build, then drop older tags of the same base.
+build_image() {
+  docker build -t "$1" -f "$BASES/$2/Dockerfile" "$BASES" >&2
+  docker images "airlock-$2" --format '{{.Repository}}:{{.Tag}}' | grep -vx "$1" | xargs -r docker rmi >/dev/null 2>&1 || true
+}
+
+ensure_image() {
+  local img; img=$(image_for "$1")
+  if ! docker image inspect "$img" >/dev/null 2>&1; then
+    echo "airlock: building $img (first use or base changed)" >&2
+    build_image "$img" "$1"
+  fi
+  echo "$img"
+}
+
+# Named volume owned by the container user (new volumes start root-owned).
+ensure_volume() {
+  local vol=$1 img=$2 path=${3:-}
+  docker volume inspect "$vol" >/dev/null 2>&1 && return 0
+  docker volume create --label airlock=1 ${path:+--label "airlock.path=$path"} "$vol" >/dev/null
+  docker run --rm -u 0 -v "$vol:/v" "$img" chown 1000:1000 /v
+}
+
+# Nearest directory with $1, from $PWD up to $2 (inclusive).
+find_up() {
+  local d=$PWD
+  while :; do
+    [ -e "$d/$1" ] && { echo "$d"; return 0; }
+    [ "$d" = "$2" ] || [ "$d" = / ] && return 1
+    d=$(dirname "$d")
+  done
+}
+
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+cmd_run() {
+  local base=$1; shift
+  [ $# -gt 0 ] || die "usage: airlock run <base> <command...>"
+  local img; img=$(ensure_image "$base")
+
+  # What gets mounted: the git repo we're in, or the current dir if not in one.
+  local root; root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  case "$HOME/" in
+    "$root"/*) die "refusing to mount $root: it contains your home folder. Run from inside a project." ;;
+  esac
+  case "$root" in
+    "$HOME"/*) ;;
+    *) die "$root is outside $HOME, which is the only folder Docker Desktop shares with containers." ;;
+  esac
+
+  local args=(
+    --rm --init
+    --user 1000:1000
+    --cap-drop ALL --security-opt no-new-privileges
+    --read-only
+    --tmpfs /tmp:rw,exec,size=2g
+    --tmpfs /home/dev:rw,exec,size=512m,uid=1000,gid=1000
+    --memory 4g --pids-limit 1024
+    -e "TZ=$(readlink -f /etc/localtime | sed 's|.*/zoneinfo/||')"
+    -v "$root:$root" -w "$PWD"
+  )
+  [ -e "$root/.git" ] && args+=(-v "$root/.git:$root/.git:ro")
+
+  # Deps folder (node_modules, .venv) lives in a per-project volume, never on the host disk.
+  local marker depdir tag pkg
+  read -r marker depdir tag <<< "$(deps_for "$base")"
+  if pkg=$(find_up "$marker" "$root"); then
+    local vol="airlock-$tag-$(basename "$pkg")-$(printf %s "$pkg" | sha256sum | cut -c1-8)"
+    ensure_volume "$vol" "$img" "$pkg"
+    args+=(-v "$vol:$pkg/$depdir")
+    [ "$base" = python ] && args+=(-e "VIRTUAL_ENV=$pkg/.venv")
+  fi
+
+  # Shared download cache across projects.
+  ensure_volume airlock-cache "$img"
+  args+=(-v airlock-cache:/cache)
+
+  # Ports from <root>/.airlock (`ports=4321 3000`), host side bound to localhost only.
+  # A port already in use is skipped: the dev server holding it is another airlock run.
+  if [ -f "$root/.airlock" ]; then
+    local p published=""
+    for p in $(sed -n 's/^ports=//p' "$root/.airlock"); do
+      [ "$p" -le 55535 ] 2>/dev/null || die "port '$p' in $root/.airlock: must be a number up to 55535"
+      port_busy "$p" && continue
+      args+=(-p "127.0.0.1:$p:$((p + 10000))")
+      published+="$p "
+    done
+    args+=(-e "AIRLOCK_PORTS=$published")
+  fi
+
+  if [ -t 0 ] && [ -t 1 ]; then args+=(-it); else args+=(-i); fi
+  exec docker run "${args[@]}" "$img" "$@"
+}
+
+cmd_status() {
+  echo "== images"; docker images --filter 'reference=airlock-*' --format '{{.Repository}}:{{.Tag}}  {{.Size}}  {{.CreatedSince}}'
+  echo "== volumes"; docker volume ls --filter label=airlock=1 --format '{{.Name}}  {{.Label "airlock.path"}}'
+}
+
+# Remove deps volumes whose project folder no longer exists.
+cmd_prune() {
+  local vol path
+  docker volume ls -q --filter label=airlock.path | while read -r vol; do
+    path=$(docker volume inspect -f '{{index .Labels "airlock.path"}}' "$vol")
+    [ -d "$path" ] || { docker volume rm "$vol" >/dev/null && echo "removed $vol ($path)"; }
+  done
+}
+
+# Shim mode: invoked as node/npm/pnpm/uv/pip/….
+me=$(basename "$0")
+if [ "$me" != airlock ]; then
+  case "$me" in
+    pip|pip3) die "pip is disabled here: it has no 7-day rule and builds local source packages. Use 'uv pip $*' (same commands)." ;;
+  esac
+  base=$(base_for "$me") || die "no base for '$me'"
+  cmd_run "$base" "$me" "$@"
+fi
+
+case "${1:-}" in
+  run)    shift; [ $# -ge 1 ] || die "usage: airlock run <base> <command...>"; cmd_run "$@" ;;
+  shell)  shift; [ $# -ge 1 ] || die "usage: airlock shell <base>"; cmd_run "$1" bash ;;
+  build)  shift; [ $# -ge 1 ] || die "usage: airlock build <base>"; build_image "$(image_for "$1")" "$1" ;;
+  status) cmd_status ;;
+  prune)  cmd_prune ;;
+  *)      sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 1 ;;
+esac

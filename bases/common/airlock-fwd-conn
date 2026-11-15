@@ -1,0 +1,4 @@
+#!/bin/sh
+# One forwarded connection (see airlock-entry): servers bind "localhost" as IPv4 or IPv6
+# (Vite/Astro pick ::1), so try IPv4, then IPv6. Nothing is read before a connect succeeds.
+socat - "TCP4:127.0.0.1:$1" 2>/dev/null || exec socat - "TCP6:[::1]:$1"
