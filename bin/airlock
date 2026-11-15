@@ -76,13 +76,85 @@ find_up() {
 
 port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
+# Paths the host runs or reads later: agent, editor, CI and direnv config, and airlock's own.
+# Package code must not plant or change them (docs/threat-model.md, C4).
+PROTECTED=(.claude .mcp.json CLAUDE.md CLAUDE.local.md AGENTS.md .pi .vscode .idea .github
+           .envrc .airlock .devcontainer)
+
+# Protected paths under $1, relative, one per line. Skips .git (read-only anyway) and the deps
+# volume mountpoint $2 (another filesystem: nothing can be moved into it).
+protected_paths() {
+  local root=$1 skip=${2:-} n expr=()
+  for n in "${PROTECTED[@]}"; do expr+=(-o -name "$n"); done
+  (cd "$root" && find . \( -path ./.git ${skip:+-o -path "./$skip"} \) -prune \
+     -o \( "${expr[@]:1}" \) -print -prune) | sed 's|^\./||' | LC_ALL=C sort
+}
+
+# Fingerprint of one path: file content, symlink target, or a folder's whole contents.
+fingerprint() {
+  if [ -L "$1" ]; then echo "link:$(readlink "$1")"
+  elif [ -d "$1" ]; then
+    tar -C "$1" -cf - --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner . 2>/dev/null | sha256sum | cut -c1-16
+  else sha256sum < "$1" | cut -c1-16; fi
+}
+
+snapshot() {  # <root> <paths...> -> "fingerprint path" lines
+  local root=$1 p; shift
+  for p in "$@"; do printf '%s %s\n' "$(fingerprint "$root/$p")" "$p"; done
+}
+
+# After a run. Existing protected paths were read-only (symlinks excepted: mounting them would
+# expose their target), so a NEW protected path, or a changed symlink, means package code
+# planted something. Then: move new ones to quarantine, and restore every changed existing one
+# from the backup. That also undoes the rename trick (move the folder holding a read-only file
+# away, plant a fresh one in its place). Changes without such evidence are the host's own edits
+# during the run, and stay. Returns 1 if anything was planted.
+check_planted() {
+  local root=$1 skip=$2 before=$3 backup=$4 p fp evidence=0
+  local -a now new=() changed=()
+  local -A was=()
+  mapfile -t now < <(protected_paths "$root" "$skip")
+  while read -r fp p; do if [ -n "$p" ]; then was[$p]=$fp; fi; done <<< "$before"
+  for p in "${now[@]}"; do [ -n "${was[$p]+x}" ] || new+=("$p"); done
+  [ ${#new[@]} -gt 0 ] && evidence=1
+  for p in "${!was[@]}"; do
+    if [ -e "$root/$p" ] || [ -L "$root/$p" ]; then
+      [ "$(fingerprint "$root/$p")" = "${was[$p]}" ] && continue
+    fi
+    changed+=("$p")
+    [[ ${was[$p]} == link:* ]] && evidence=1
+  done
+  [ $evidence = 1 ] || return 0
+
+  local q="${XDG_CACHE_HOME:-$HOME/.cache}/airlock/quarantine/$(date +%Y%m%d-%H%M%S)-$$"
+  for p in "${new[@]}"; do mkdir -p "$q/$(dirname "$p")"; mv "$root/$p" "$q/$p"; done
+  for p in "${changed[@]}"; do
+    if [ -e "$root/$p" ] || [ -L "$root/$p" ]; then
+      mkdir -p "$q/$(dirname "$p")"; mv "$root/$p" "$q/$p.replaced"
+    fi
+    mkdir -p "$(dirname "$root/$p")"; cp -a "$backup/$p" "$root/$p"
+  done
+  {
+    echo "airlock: package code tried to plant files the host would run or read."
+    echo "airlock: moved to quarantine: $q"
+    [ ${#new[@]} -eq 0 ]     || printf 'airlock:   planted:  %s\n' "${new[@]}"
+    [ ${#changed[@]} -eq 0 ] || printf 'airlock:   restored: %s\n' "${changed[@]}"
+  } >&2
+  return 1
+}
+
 cmd_run() {
   local base=$1; shift
   [ $# -gt 0 ] || die "usage: airlock run <base> <command...>"
   local img; img=$(ensure_image "$base")
 
-  # What gets mounted: the git repo we're in, or the current dir if not in one.
-  local root; root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+  # What gets mounted: the git repo we're in, or the nearest folder marked with .airlock.
+  # Never a plain folder: from ~/src or ~/Dropbox that would expose everything below (C5).
+  local root
+  if ! root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    root=$(find_up .airlock /) ||
+      die "not in a project: run inside a git repo, or mark the project folder with an empty .airlock file."
+  fi
   case "$HOME/" in
     "$root"/*) die "refusing to mount $root: it contains your home folder. Run from inside a project." ;;
   esac
@@ -131,8 +203,39 @@ cmd_run() {
     args+=(-e "AIRLOCK_PORTS=$published")
   fi
 
-  if [ -t 0 ] && [ -t 1 ]; then args+=(-it); else args+=(-i); fi
-  exec docker run "${args[@]}" "$img" "$@"
+  # Protected paths (C4): back up, mount read-only, check again after the run.
+  local skip="" rel
+  if [ -n "${pkg:-}" ]; then rel=${pkg#"$root"}; rel=${rel#/}; skip="${rel:+$rel/}$depdir"; fi
+  local -a existing; mapfile -t existing < <(protected_paths "$root" "$skip")
+  local before backup p
+  before=$(snapshot "$root" "${existing[@]}")
+  backup=$(mktemp -d)
+  for p in "${existing[@]}"; do
+    (cd "$root" && cp -a --parents "$p" "$backup/")
+    [ -L "$root/$p" ] || args+=(-v "$root/$p:$root/$p:ro")
+  done
+
+  # Not exec: the check runs after the container exits. Without a terminal, run docker in the
+  # background so a TERM/INT to airlock can be passed on (bash defers traps while a foreground
+  # child runs); 0<&0 keeps stdin, which background jobs would otherwise lose.
+  local rc=0
+  if [ -t 0 ] && [ -t 1 ]; then
+    trap 'true' INT
+    docker run -it "${args[@]}" "$img" "$@" || rc=$?
+  else
+    docker run -i "${args[@]}" "$img" "$@" 0<&0 &
+    local dpid=$!
+    trap "kill -TERM $dpid 2>/dev/null" INT TERM HUP
+    while :; do
+      wait "$dpid" && rc=0 || rc=$?
+      kill -0 "$dpid" 2>/dev/null || break
+    done
+  fi
+  trap - INT TERM HUP
+
+  check_planted "$root" "$skip" "$before" "$backup" || { [ "$rc" -ne 0 ] || rc=1; }
+  rm -rf "$backup"
+  return "$rc"
 }
 
 cmd_status() {
@@ -156,11 +259,13 @@ if [ "$me" != airlock ]; then
     pip|pip3) die "pip is disabled here: it has no 7-day rule and builds local source packages. Use 'uv pip $*' (same commands)." ;;
   esac
   base=$(base_for "$me") || die "no base for '$me'"
-  cmd_run "$base" "$me" "$@"
+  rc=0; cmd_run "$base" "$me" "$@" || rc=$?
+  exit "$rc"
 fi
 
 case "${1:-}" in
-  run)    shift; [ $# -ge 1 ] || die "usage: airlock run <base> <command...>"; cmd_run "$@" ;;
+  run)    shift; [ $# -ge 1 ] || die "usage: airlock run <base> <command...>"
+          rc=0; cmd_run "$@" || rc=$?; exit "$rc" ;;
   shell)  shift; [ $# -ge 1 ] || die "usage: airlock shell <base>"; cmd_run "$1" bash ;;
   build)  shift; [ $# -ge 1 ] || die "usage: airlock build <base>"; build_image "$(image_for "$1")" "$1" ;;
   status) cmd_status ;;

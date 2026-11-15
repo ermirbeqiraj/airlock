@@ -24,6 +24,12 @@ runs in throwaway containers built from base images we maintain.
   - python: no source builds (wheels only); new versions 7+ days old.
 - `pip` refuses and points to `uv pip` (same commands): pip has no age rule and builds local
   source packages.
+- Only a project gets mounted: the git repo you're in, or the nearest folder holding an
+  `.airlock` file (empty is fine). Anywhere else, airlock refuses.
+- Agent, editor and CI config (`.claude/`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.pi/`,
+  `.vscode/`, `.idea/`, `.github/`, `.envrc`, `.airlock`, …) is read-only inside. Files of
+  that kind planted during a run are moved to `~/.cache/airlock/quarantine/` when it ends,
+  with a warning, and the command fails.
 - Ports: `ports=4321 3000` in `<repo>/.airlock`, published on 127.0.0.1 only (not the LAN).
   Servers that bind localhost work as-is (forwarded inside the container, IPv4 or IPv6). A port
   already in use is skipped (the running dev server owns it).
@@ -45,3 +51,9 @@ runs in throwaway containers built from base images we maintain.
 
     airlock run <base> <cmd...>   airlock shell <base>   airlock build <base>
     airlock status                airlock prune
+
+## Tests
+
+`tests/run.sh [filter]` checks every claim in `docs/threat-model.md` with harmless fake
+attacks (`tests/must-block/`), plus the things that must keep working (`tests/must-work/`).
+Needs Docker and network. About a minute.

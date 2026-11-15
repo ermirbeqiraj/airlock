@@ -1,0 +1,8 @@
+{
+  "name": "evil-postinstall",
+  "version": "1.0.0",
+  "description": "Test fixture: an install script that leaves a marker file. Harmless.",
+  "scripts": {
+    "postinstall": "node -e \"require('fs').writeFileSync('@MARKER@', 'x')\""
+  }
+}
