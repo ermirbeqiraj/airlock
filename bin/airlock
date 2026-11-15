@@ -224,6 +224,15 @@ cmd_run() {
       published+="$p "
     done
     args+=(-e "AIRLOCK_PORTS=$published")
+    # `host_ports=5432`: the host's own services (e.g. compose Postgres) answer on localhost
+    # inside, as the project's config expects. Adds no reach: host.docker.internal is open
+    # anyway (N1).
+    local hp=""
+    for p in $(sed -n 's/^host_ports=//p' "$root/.airlock"); do
+      [ "$p" -le 65535 ] 2>/dev/null || die "host port '$p' in $root/.airlock: must be a number up to 65535"
+      hp+="$p "
+    done
+    args+=(-e "AIRLOCK_HOST_PORTS=$hp")
   fi
 
   # Protected paths (C4): back up, mount read-only, check again after the run.

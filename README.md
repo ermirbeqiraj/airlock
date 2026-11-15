@@ -18,6 +18,8 @@ What's protected, what isn't, and why: [docs/threat-model.md](docs/threat-model.
 
 - A project is a git repo, or a folder with an `.airlock` file. Anywhere else airlock refuses.
 - Dev server ports: `ports=4321` in `.airlock`, published on 127.0.0.1 only.
+- Host services (e.g. compose Postgres): `host_ports=5432` in `.airlock` makes them answer on
+  localhost inside.
 - Agent/editor/CI config planted during a run is moved to `~/.cache/airlock/quarantine/`.
 - Limits: folders under `$HOME` only (Docker Desktop), ~0.2 s per command, editors don't see
   `node_modules`/`.venv`. Tools with their own runtime (e.g. pi) run on the host.

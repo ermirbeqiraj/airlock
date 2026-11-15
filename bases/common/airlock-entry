@@ -7,4 +7,15 @@
 for p in $AIRLOCK_PORTS; do
   socat "TCP-LISTEN:$((p + 10000)),fork,reuseaddr" "EXEC:airlock-fwd-conn $p" 2>/dev/null &
 done
+# For each port P in AIRLOCK_HOST_PORTS: localhost:P inside reaches the host's port P, so
+# services the host runs (compose Postgres etc.) work with the project's localhost config.
+for p in $AIRLOCK_HOST_PORTS; do
+  socat "TCP4-LISTEN:$p,bind=127.0.0.1,fork,reuseaddr" "TCP:host.docker.internal:$p" 2>/dev/null &
+  socat "TCP6-LISTEN:$p,bind=[::1],fork,reuseaddr" "TCP:host.docker.internal:$p" 2>/dev/null &
+done
+# Wait (up to ~1 s) until they listen, so the command's first connection doesn't race them.
+for p in $AIRLOCK_HOST_PORTS; do
+  h=$(printf ':%04X ' "$p"); i=0
+  until grep -q "$h.* 0A " /proc/net/tcp 2>/dev/null || [ $i -ge 50 ]; do sleep 0.02; i=$((i + 1)); done
+done
 exec "$@"
