@@ -64,9 +64,9 @@ ensure_volume() {
   docker run --rm -u 0 -v "$vol:/v" "$img" chown 1000:1000 /v
 }
 
-# Nearest directory with $1, from $PWD up to $2 (inclusive).
+# Nearest directory with $1, from the current folder's real path (links resolved) up to $2.
 find_up() {
-  local d=$PWD
+  local d; d=$(pwd -P)
   while :; do
     [ -e "$d/$1" ] && { echo "$d"; return 0; }
     [ "$d" = "$2" ] || [ "$d" = / ] && return 1
@@ -160,6 +160,9 @@ cmd_run() {
     root=$(find_up .airlock /) ||
       die "not in a project: run inside a git repo, or mark the project folder with an empty .airlock file."
   fi
+  # Every check below runs on the real path: Docker follows links when it mounts, so a planted
+  # `home -> $HOME` would otherwise pass as a project folder (red-team, tests/must-block/symlink-cwd.sh).
+  root=$(readlink -f -- "$root")
   case "$HOME/" in
     "$root"/*) die "refusing to mount $root: it contains your home folder. Run from inside a project." ;;
   esac
@@ -187,7 +190,7 @@ cmd_run() {
     --tmpfs /home/dev:rw,exec,size=512m,uid=1000,gid=1000
     --memory 4g --pids-limit 1024
     -e "TZ=$(readlink -f /etc/localtime | sed 's|.*/zoneinfo/||')"
-    -v "$root:$root" -w "$PWD"
+    -v "$root:$root" -w "$(pwd -P)"
   )
   # .git is mounted read-only (hooks and config run on the host). Never through a link: Docker
   # follows it, so a planted `.git -> $HOME` would mount the whole home folder (found by an
