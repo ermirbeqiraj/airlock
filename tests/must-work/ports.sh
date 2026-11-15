@@ -33,8 +33,8 @@ t_stop() {
   timeout 15 bash -c "while docker ps --format '{{.Command}}' | grep -q 'server.js'; do sleep 0.5; done" || { echo "container still running"; return 1; }
 }
 
-check ok "server on 127.0.0.1 inside reachable from host" t_v4
-check ok "server on ::1 inside reachable from host"       t_v6
+check W4 "server on 127.0.0.1 inside reachable from host" t_v4
+check W4 "server on ::1 inside reachable from host"       t_v6
 check C7 "not reachable from the LAN address"             t_lan
-check ok "another command runs while the port is held"   t_busy
-check ok "stopping the command stops its container"      t_stop
+check W4 "another command runs while the port is held"   t_busy
+check W4 "stopping the command stops its container"      t_stop

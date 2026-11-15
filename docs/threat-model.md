@@ -12,13 +12,25 @@ is a hope, not a claim.
 | Id | Claim | Why it matters |
 |----|-------|----------------|
 | C1 | Package code can't read host secrets: no home folder, keys, tokens or host env vars. Only the project folder is visible. | This is what attackers come for. |
-| C2 | Package code can't run at install time: npm/pnpm install scripts and Python source builds are blocked, and a project's own config can't turn them back on. | Install is the most common attack moment. It runs before you've even used the package. |
+| C2 | Package code can't run at install time: npm/pnpm install scripts and Python source builds are blocked, and a project's own config can't turn them back on. One exception: a project that is a package built with uv's own backend (`uv_build`) may build itself, because that runs no PyPI code. Its dependencies still can't. | Install is the most common attack moment. It runs before you've even used the package. |
 | C3 | Versions published in the last 7 days aren't installed. | Hijacked releases are usually caught and pulled within days. |
 | C4 | Package code can't plant things the host runs or reads later: git hooks/config, agent config (`.claude/`, `CLAUDE.md`, `AGENTS.md`, `.mcp.json`, `.pi/`), editor and CI config (`.vscode/`, `.idea/`, `.github/`), `.envrc`, `.airlock`. Existing ones are read-only. New ones are moved to quarantine when the command ends, with a warning. | The host's agents and editor have full access. Planting instructions or hooks for them is a way out of the box. |
 | C5 | Only a project gets mounted: the git repo you're in, or the nearest folder marked with `.airlock`. Never your home folder, a folder above it, a plain folder, or one holding what the host runs (airlock itself, a folder on PATH). | Running `node` in `~/src` or `~/Dropbox` must not expose everything below it. |
 | C6 | Package code can't take over the container or reach the machine: non-root, no capabilities, no privilege escalation, read-only system files, no Docker socket, memory and process limits. | Keeps the wall a wall. |
 | C7 | Dev servers are reachable from this machine only (127.0.0.1), not from the LAN. | A dev server is unauthenticated code. |
 | C8 | What's pinned stays pinned: base images by digest, tool versions exact. | You know what runs, and it changes only when you change it. |
+
+## Must work
+
+airlock only makes sense if normal work keeps working. Tests: `tests/must-work/`.
+
+| Id | What | Test |
+|----|------|------|
+| W1 | Node: `node`, `npm`, `npx`, `pnpm` as usual: install, add, require, run scripts. | node.sh |
+| W2 | Python: `uv` and `uvx` as usual: sync, run, add, also for a project that is a package (`uv_build`, with entry points). `python3` stays the host's. | python.sh |
+| W3 | It feels like the host: files made inside are yours, host timezone, deps (`node_modules`, `.venv`) in a volume, not on the host disk. | node.sh, python.sh |
+| W4 | Dev servers are reachable from the host on their own port (IPv4 and IPv6). Other commands keep working while one runs, and stopping the command stops its container. | ports.sh |
+| W5 | Hot reload: an edit on the host reaches a watcher inside. | watch.sh |
 
 ## Findings (fixed, with tests)
 
@@ -58,3 +70,4 @@ is a hope, not a claim.
 | N7 | Production and deploys. | A different problem. |
 | N8 | A trusted caller can relax the rules, e.g. `npm install --ignore-scripts=false` (command-line flags win). | Agents are told not to, and to ask first. |
 | N9 | Package code can write a folder shaped like a bare git repo. Running git *inside* it may use its config. | Not reproduced with `git status` (2.53). Host fix: `git config --global safe.bareRepository explicit`. |
+| N10 | A Python project that is a package with a build backend other than `uv_build` (hatchling, setuptools, …) won't install: building it is blocked like any source build. | Move it to `uv_build`, or set `[tool.uv] package = false` if it needs no entry points. |

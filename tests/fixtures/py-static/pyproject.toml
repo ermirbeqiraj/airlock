@@ -1,0 +1,9 @@
+# Test fixture: like py-setup, but with static metadata, so uv can lock it without building
+# it. That makes the install step itself the one that has to refuse the build. Harmless.
+[project]
+name = "evil-static"
+version = "1.0"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

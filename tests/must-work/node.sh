@@ -21,10 +21,10 @@ t_tz() {
   [ "$host" = "$inside" ] || { echo "host $host, container $inside"; return 1; }
 }
 
-check ok "node, npm, pnpm, npx run"                     t_tools
-check ok "npm install + require works"                  t_install
-check ok "node_modules stays off the host disk"         t_not_on_host
-check ok "npm run <script> works"                       t_script
-check ok "pnpm add + require works"                     t_pnpm
-check ok "files made inside are owned by you"           t_owner
-check ok "container uses the host timezone"             t_tz
+check W1 "node, npm, pnpm, npx run"                     t_tools
+check W1 "npm install + require works"                  t_install
+check W3 "node_modules stays off the host disk"         t_not_on_host
+check W1 "npm run <script> works"                       t_script
+check W1 "pnpm add + require works"                     t_pnpm
+check W3 "files made inside are owned by you"           t_owner
+check W3 "container uses the host timezone"             t_tz

@@ -83,6 +83,35 @@ t_uv_control() {
   [ -e "$(marker uv-build)" ] || { echo "fixture never ran, even with builds on"; return 2; }
 }
 
+# --- uv_build project: it may build itself (airlock's uv wrapper), its dependencies may not
+uvb_project() {  # <name> <deps>
+  project "$1"
+  fixture py-static evil "$(marker uvb-build)"
+  mkdir -p src/t && touch src/t/__init__.py
+  cat > pyproject.toml <<EOF
+[project]
+name = "t"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [$2]
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+evil-static = { path = "evil" }
+EOF
+}
+t_uvb_sync() { uvb_project scripts-uvb '"evil-static"'; uv sync >/dev/null 2>&1; [ ! -e "$(marker uvb-build)" ]; }
+t_uvb_with() { uvb_project scripts-uvb-with ''; uv run --with ./evil python -c 1 >/dev/null 2>&1; [ ! -e "$(marker uvb-build)" ]; }
+t_uvb_control() {
+  uvb_project scripts-uvb-ctl ''
+  uv venv --allow-existing -q >/dev/null 2>&1
+  "$AIRLOCK" run python env -u UV_CONFIG_FILE -u UV_NO_BUILD uv pip install ./evil >/dev/null 2>&1
+  [ -e "$(marker uvb-build)" ] || { echo "fixture never ran, even with builds on"; return 2; }
+}
+
 t_pip() {
   project scripts-pip
   local out; out=$(pip install six 2>&1) && { echo "pip ran"; return 1; }
@@ -98,4 +127,7 @@ check C2 "control: pnpm fixture runs when scripts are on"         t_pnpm_control
 check C2 "uv sync: source build blocked despite [tool.uv]"        t_uv_sync
 check C2 "uv pip install: source build blocked despite [tool.uv.pip]" t_uv_pip
 check C2 "control: uv fixture builds when builds are on"          t_uv_control
+check C2 "uv_build project: its dependencies still can't build" t_uvb_sync
+check C2 "uv_build project: uv run --with can't build"        t_uvb_with
+check C2 "control: static-metadata fixture builds when builds are on" t_uvb_control
 check C2 "pip refuses to run"                                     t_pip

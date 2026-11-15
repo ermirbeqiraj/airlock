@@ -14,4 +14,4 @@ t_watch() {
   wait $pid && grep -q event watch.log
 }
 
-check ok "a host edit reaches a watcher inside" t_watch
+check W5 "a host edit reaches a watcher inside" t_watch

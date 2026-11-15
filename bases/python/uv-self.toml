@@ -1,0 +1,5 @@
+# Used by airlock's uv wrapper while it builds a uv_build project itself (see ./uv).
+# Same as uv.toml minus the top-level no-build: dependencies are listed in
+# UV_NO_BUILD_PACKAGE instead. uv pip stays wheels-only.
+[pip]
+no-build = true

@@ -8,7 +8,30 @@ t_sync()  { uv sync -q >/dev/null 2>&1 && uv run -q python -c 'import six'; }
 t_not_on_host() { [ -z "$(ls -A .venv 2>/dev/null)" ] || { echo ".venv has files on the host"; return 1; }; }
 t_python3_host() { [ "$(command -v python3)" != "$REPO/shims/python3" ]; }
 
-check ok "uv and uvx run"                      t_tools
-check ok "uv sync + uv run import works"       t_sync
-check ok ".venv stays off the host disk"       t_not_on_host
-check ok "python3 stays the host's (not shimmed)" t_python3_host
+# A project that is a package (entry points), built with uv's own backend.
+t_package() {
+  project work-python-pkg
+  mkdir -p src/t && printf 'def main():\n    print("hello from t")\n' > src/t/__init__.py
+  cat > pyproject.toml <<'EOF'
+[project]
+name = "t"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["six"]
+
+[project.scripts]
+t = "t:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
+EOF
+  uv sync -q && [ "$(uv run -q t)" = "hello from t" ] && uv run -q python -c 'import six' &&
+    uv add -q six && uv run -q t >/dev/null && uv sync -q --locked && uv run -q --frozen t >/dev/null
+}
+
+check W2 "uv and uvx run"                      t_tools
+check W2 "uv sync + uv run import works"       t_sync
+check W3 ".venv stays off the host disk"       t_not_on_host
+check W2 "a uv_build package: uv sync, uv run <entry point>, uv add, --locked/--frozen" t_package
+check W2 "python3 stays the host's (not shimmed)" t_python3_host

@@ -1,0 +1,71 @@
+#!/bin/bash
+# airlock's `uv` in the python base: passes everything to the real uv, wheels-only (C2).
+#
+# One exception, for projects that are packages built with uv's own backend (uv_build):
+# uv counts building the project itself as a source build, and has no switch to allow only
+# that. uv_build is built into uv ("direct build"), so building the project runs no PyPI
+# code. For `uv sync` / `uv run` in such a project:
+#   1. bring uv.lock up to date, wheels-only (resolving needs no build);
+#   2. install exactly what the lock says (frozen: no new names can appear), with builds
+#      allowed for the project only: every other package in the lock stays no-build;
+#   3. `uv run`: run the command wheels-only, without syncing again (`--with` and scripts
+#      resolve here, so they stay wheels-only too).
+# `uv add` / `uv remove` only edit pyproject.toml and uv.lock; the next sync/run installs.
+set -euo pipefail
+REAL=/usr/local/lib/airlock/uv
+proj=${VIRTUAL_ENV:+${VIRTUAL_ENV%/.venv}}
+# Only a plain uv_build requirement (no URL): anything else would fetch a backend and run it.
+if [ -z "$proj" ] || ! grep -qE '^build-backend *= *"uv_build"' "$proj/pyproject.toml" 2>/dev/null ||
+   ! grep -qE '^requires *= *\["uv_build[^"@]*"\]' "$proj/pyproject.toml"; then
+  exec "$REAL" "$@"
+fi
+
+cmd=""; for a in "$@"; do case $a in -*) ;; *) cmd=$a; break ;; esac; done
+case $cmd in
+  sync|run) ;;
+  add|remove) UV_NO_SYNC=1 exec "$REAL" "$@" ;;
+  *) exec "$REAL" "$@" ;;
+esac
+
+# Every package in the lock except the project itself (`source = { editable = "." }`).
+lock_deps() {
+  local line name="" self=0
+  while IFS= read -r line; do
+    case $line in
+      '[[package]]') [ -z "$name" ] || [ $self = 1 ] || echo "$name"; name=""; self=0 ;;
+      'name = "'*) name=${line#name = \"}; name=${name%\"} ;;
+      'source = { editable = "." }') self=1 ;;
+    esac
+  done < "$proj/uv.lock"
+  [ -z "$name" ] || [ $self = 1 ] || echo "$name"
+}
+self_build() {  # <uv args...>: builds allowed for the project only
+  UV_NO_BUILD=0 UV_CONFIG_FILE=/etc/airlock/uv-self.toml UV_FROZEN=1 \
+    UV_NO_BUILD_PACKAGE="$(lock_deps | tr '\n' ' ')" "$REAL" "$@"
+}
+
+# One pass over the options (for `uv run`, those before its command): --locked/--frozen pick
+# step 1 (they'd clash with the frozen install), and `uv run`'s extras/groups go to step 2.
+lock=(lock -q); own=(); sel=(); args=("$@"); i=0; seen=0; done=0
+while [ $i -lt ${#args[@]} ]; do
+  a=${args[$i]}
+  if [ $done = 0 ]; then
+    case $a in
+      --locked) lock=(lock -q --check); i=$((i + 1)); continue ;;
+      --frozen) lock=(); i=$((i + 1)); continue ;;
+      sync|run) seen=1 ;;
+      --extra|--group|--only-group|--no-group) sel+=("$a" "${args[$((i + 1))]:-}"); own+=("$a"); i=$((i + 1)); a=${args[$i]:-} ;;
+      --extra=*|--group=*|--only-group=*|--no-group=*|--all-extras|--all-groups|--no-dev|--dev|--only-dev|--no-default-groups) sel+=("$a") ;;
+      --with|--with-editable|--with-requirements|--python|-p|--directory|--project|--package|--env-file|--index|--default-index) own+=("$a"); i=$((i + 1)); a=${args[$i]:-} ;;
+      -*) ;;
+      *) [ $seen = 0 ] || done=1 ;;
+    esac
+  fi
+  own+=("$a"); i=$((i + 1))
+done
+
+# 1. Lock (wheels-only).  2. Install from the lock, only the project may build.  3. Run.
+[ ${#lock[@]} = 0 ] || (cd "$proj" && "$REAL" "${lock[@]}")
+if [ "$cmd" = sync ]; then (cd "$proj" && self_build "${own[@]}"); exit; fi
+(cd "$proj" && self_build sync --inexact -q "${sel[@]}")
+UV_NO_SYNC=1 exec "$REAL" "${own[@]}"

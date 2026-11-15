@@ -3,14 +3,17 @@
 # To update: pick new digests (older than 7 days), change them here; airlock rebuilds on next use.
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.3@sha256:2d890623d310b57771ce840f0da5eed5fc6d657da05ffaa45d82797b53fa3abc /uv /uvx /usr/local/lib/airlock/
 
 RUN apt-get update && apt-get install -y --no-install-recommends socat tzdata \
  && rm -rf /var/lib/apt/lists/* \
- && useradd -u 1000 -M -d /home/dev dev
+ && useradd -u 1000 -M -d /home/dev dev \
+ && ln -s /usr/local/lib/airlock/uvx /usr/local/bin/uvx
 
 COPY common/ /usr/local/bin/
-COPY python/uv.toml /etc/airlock/uv.toml
+COPY python/uv.toml python/uv-self.toml /etc/airlock/
+# uv wrapper: lets a uv_build project build itself, nothing else (see the file).
+COPY python/uv /usr/local/bin/uv
 
 # Safety settings as environment variables / a named config file, so a project's
 # pyproject or uv.toml can't relax them (tested).
